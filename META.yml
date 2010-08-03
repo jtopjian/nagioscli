@@ -1,0 +1,19 @@
+---
+name: NagiosCLI
+version: 0.01
+author:
+  - 'Joe Topjian <joe@terrarum.net>'
+abstract: Nagios cli client
+license: perl
+build_requires:
+  Config::IniFiles: 0
+  Curses: 0
+  Curses::UI: 0
+  Curses::UI::Grid: 0
+  Nagios::Scrape: 0
+generated_by: Module::Build version 0.280801
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2
+resources:
+  license: http://dev.perl.org/licenses/

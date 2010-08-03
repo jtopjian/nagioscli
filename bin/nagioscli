@@ -1,0 +1,302 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+use Curses;
+use Curses::UI;
+use Nagios::Scrape;
+use Config::IniFiles;
+use POSIX qw(strftime);
+
+##
+# Nagios config
+##
+my $config =
+  ( -e $ENV{HOME} . '/.nagioscli' ) ? $ENV{HOME} . '/.nagioscli' : undef;
+
+die("Config file located at $ENV{HOME}/.nagioscli is required\n")
+  if ( !$config );
+
+tie my %ini, 'Config::IniFiles', ( -file => $config );
+
+my $nagios;
+foreach my $host ( keys %ini ) {
+    $nagios = Nagios::Scrape->new(
+        username => $ini{$host}{username},
+        password => $ini{$host}{password},
+        url      => $ini{$host}{url},
+    );
+}
+
+my @data;
+my %fields;
+
+# Redirect STDERR to /dev/null
+#open STDERR, '>', '/dev/null';
+
+##
+# Root Widget
+##
+
+my $cui = new Curses::UI(
+#    -clear_on_exit => 1,
+    -color_support => 1,
+);
+
+##
+# Create main screen
+##
+
+my $screen = $cui->add(
+    'screen', 'Window',
+    -padtop => 0,
+    -border => 0,
+    -ipad   => 0,
+);
+
+##
+# Add bottom and top status
+##
+
+my $status_label = $screen->add(
+    'status_label', 'Label',
+    -y             => 0,
+    -height        => 2,
+    -width         => -1,
+    -reverse       => 1,
+    -paddingspaces => 1,
+    -fg            => 'blue',
+    -bg            => 'white',
+);
+
+##
+# Set up the Grid
+##
+
+my $grid = $screen->add(
+    'grid', 'Grid',
+    -y         => 2,
+    -bg        => "blue",
+    -fg        => "white",
+    -editable  => 0,
+    -width     => 45,
+    -padbottom => 1,
+    -onrowdraw => sub {
+        my $row = shift;
+        my $v   = $row->get_value('status') ? $row->get_value('status') : '';
+        if ( $v eq 'WARNING' ) {
+            $row->fg('yellow');
+        }
+        elsif ( $v eq 'CRITICAL' ) {
+            $row->fg('red');
+        }
+        elsif ( $v eq 'OK' ) {
+            $row->fg('green');
+        }
+        elsif ( $v eq 'UNKNOWN' ) {
+            $row->fg('yellow');
+        }
+        else {
+            $row->bg('');
+        }
+    },
+
+    -onnextpage => sub {
+        my $grid = shift;
+        my ( $pgsize, $pg ) = ( $grid->page_size, $grid->page );
+
+        my $row    = $grid->get_foused_row;
+        my $offset = $pgsize * $grid->page( $pg + 1 );
+        if ( $offset < $#data ) {
+            fill_data( $offset, $pgsize, \@data, $grid );
+        }
+        else { $grid->page($pg); return 0; }
+        my $last_row = $grid->get_foused_row;
+        $grid->focus_row( $last_row, 1, 0 ) if ( $last_row ne $row );
+        return $grid;
+    },
+
+    -onprevpage => sub {
+        my $grid = shift;
+        my ( $pgsize, $pg ) = ( $grid->page_size, $grid->page );
+        return 0 unless $pg;
+        my $offset = $pgsize * $grid->page( $pg - 1 );
+        if ( $offset < $#data ) {
+            fill_data( $offset, $pgsize, \@data, $grid );
+        }
+        else { $grid->page($pg); return 0; }
+        return $grid;
+    },
+
+    -onrowfocus => sub {
+        my $row = shift;
+        my $p   = $row->parent->parent;
+        foreach my $k ( keys %fields ) {
+            $fields{$k}->text( $row->get_value($k) );
+        }
+    },
+
+);
+
+my $help_label = $screen->add(
+    'help_label', 'Label',
+    -y             => -1,
+    -width         => -1,
+    -reverse       => 1,
+    -paddingspaces => 1,
+    -fg            => 'blue',
+    -bg            => 'white',
+);
+
+$screen->add( undef, 'Label', -text => 'Host', -x => 48, -y => 3, -width => 9 );
+$screen->add(
+    undef, 'Label',
+    -text  => 'Service',
+    -x     => 48,
+    -y     => 4,
+    -width => 9
+);
+$screen->add(
+    undef, 'Label',
+    -text  => 'Status',
+    -x     => 48,
+    -y     => 5,
+    -width => 9
+);
+$screen->add(
+    undef, 'Label',
+    -text  => 'Checked',
+    -x     => 48,
+    -y     => 6,
+    -width => 9
+);
+$screen->add(
+    undef, 'Label',
+    -text  => 'Duration',
+    -x     => 48,
+    -y     => 7,
+    -width => 9
+);
+$screen->add(
+    undef, 'Label',
+    -text  => 'Attempt',
+    -x     => 48,
+    -y     => 8,
+    -width => 9
+);
+$screen->add( undef, 'Label', -text => 'Info', -x => 48, -y => 9, -width => 9 );
+
+$fields{host} =
+  $screen->add( 'host', 'TextEntry', -x => 57, -y => 3, -sbborder => 1 );
+$fields{service} =
+  $screen->add( 'service', 'TextEntry', -x => 57, -y => 4, -sbborder => 1 );
+$fields{status} =
+  $screen->add( 'status', 'TextEntry', -x => 57, -y => 5, -sbborder => 1 );
+$fields{time} =
+  $screen->add( 'time', 'TextEntry', -x => 57, -y => 6, -sbborder => 1 );
+$fields{duration} =
+  $screen->add( 'duration', 'TextEntry', -x => 57, -y => 7, -sbborder => 1 );
+$fields{attempts} =
+  $screen->add( 'attempts', 'TextEntry', -x => 57, -y => 8, -sbborder => 1 );
+$fields{information} =
+  $screen->add( 'information', 'TextEntry', -x => 57, -y => 9, -sbborder => 1 );
+
+$grid->add_cell( 'host',    -width => 12, -label => 'Host' );
+$grid->add_cell( 'service', -width => 20, -label => 'Service' );
+$grid->add_cell( 'status',  -width => 10, -label => 'Status' );
+$grid->layout_content;
+
+draw_rows();
+
+##
+# Callback routines
+##
+
+sub draw_rows {
+    my $row_count = $grid->rows_count;
+    if ( $row_count > 0 ) {
+        $grid->_delete_row(1) for ( 0 .. $row_count );
+    }
+    @data = $nagios->get_service_status();
+    @data = (
+        {
+            host        => '',
+            service     => '',
+            status      => '',
+            time        => '',
+            duration    => '',
+            attempts    => '',
+            information => ''
+        }
+    ) if ( !@data );
+    for my $i ( 0 .. $#data ) {
+        my $ret = $grid->add_row(
+            undef,
+            -bg    => 'black',
+            -fg    => 'white',
+            -cells => { %{ $data[$i] } }
+        );
+        last unless defined $ret;
+    }
+    my ( $critical, $warning, $ok, $unknown ) = ( 0, 0, 0, 0 );
+    foreach my $d (@data) {
+        $critical++ if ( $d->{status} eq 'CRITICAL' );
+        $warning++  if ( $d->{status} eq 'WARNING' );
+        $ok++       if ( $d->{status} eq 'OK' );
+        $unknown++  if ( $d->{status} eq 'UNKNOWN' );
+    }
+    my $date = strftime( "%a, %d %b %Y %H:%M:%S %z", localtime( time() ) );
+    $status_label->text(
+"OK: $ok\t Critical: $critical\t Warning: $warning\t Unknown: $unknown\n"
+    );
+    $help_label->text("^R Refresh\t ^X Exit\t $date");
+    my $frow = $grid->first_row();
+    $frow->event_onfocus();
+    $grid->draw();
+}
+
+sub exit_dialog {
+    my $return = $cui->dialog(
+        -title   => "Are you sure?",
+        -buttons => [ 'yes', 'no' ],
+        -message => "Do you really want to quit?",
+    );
+
+    exit(0) if $return;
+}
+
+##
+# Helper
+##
+sub fill_data($;) {
+    my $offset = shift;
+    my $limit  = shift;
+    my $data   = shift;
+    my $grid   = shift;
+
+    for my $i ( 0 .. $limit ) {
+        my $row = $grid->get_row( $grid->{_rows}[ $i + 1 ] );
+        next unless ref($row);
+
+        if ( $#{$data} < $offset + $i ) {
+            $row->hide;
+            $row->{-focusable} = 0;
+            next;
+        }
+        $row->show;
+        $row->{-focusable} = 1;
+
+        $row->set_values( %{ $$data[ $offset + $i ] } );
+    }
+}
+
+##
+# main loop
+##
+
+$cui->set_binding( \&exit_dialog, "\cX" );
+$cui->set_binding( \&draw_rows,   "\cR" );
+
+$cui->set_timer( 'REFRESH', \&draw_rows, 30 );
+$cui->enable_timer('REFRESH');
+$cui->mainloop;

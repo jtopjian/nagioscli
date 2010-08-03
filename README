@@ -1,0 +1,20 @@
+NagiosCLI
+
+`nagioscli` is a small curses-based nagios appliation. Once installed,
+configure it by creating a ~/.nagioscli ini file like so:
+
+[Identifier]
+url=http://path/to/cgi-bin/status.cgi
+username=nagiosadmin
+password=foobar
+
+
+
+INSTALLATION
+
+To install this module, run the following commands:
+
+	perl Build.PL
+	./Build
+	./Build test
+	./Build install
